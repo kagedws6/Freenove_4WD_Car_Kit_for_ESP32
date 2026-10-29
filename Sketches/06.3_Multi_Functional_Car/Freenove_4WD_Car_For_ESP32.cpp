@@ -8,6 +8,30 @@
 
 /////////////////////PCA9685 drive area///////////////////////////////////
 PCA9685 pca9685;//Instantiate a PCA9685 object
+rover::MotionGuard roverMotion;
+static void ApplyMotorOutput(int, int, int, int);
+
+void Motor_Move(int a, int b, int c, int d) {
+  roverMotion.request(a, b, c, d);
+}
+
+void Motor_Stop(void) {
+  carFlag = 0;
+  roverMotion.stop();
+  ApplyMotorOutput(0, 0, 0, 0);
+}
+
+void Motor_Service(void) {
+  static int applied[4] = {};
+  if (!roverMotion.tick(millis())) carFlag = 0;
+  bool changed = false;
+  for (int i = 0; i < 4; ++i) changed |= applied[i] != roverMotion.output[i];
+  if (changed) {
+    ApplyMotorOutput(roverMotion.output[0], roverMotion.output[1],
+                     roverMotion.output[2], roverMotion.output[3]);
+    for (int i = 0; i < 4; ++i) applied[i] = roverMotion.output[i];
+  }
+}
 
 //PCA9685 initialization
 void PCA9685_Setup(void)
@@ -15,7 +39,7 @@ void PCA9685_Setup(void)
   Wire.begin(PCA9685_SDA, PCA9685_SCL);
   pca9685.setupSingleDevice(Wire, PCA9685_ADDRESS);
   pca9685.setToFrequency(FREQUENCY);
-  Motor_Move(0,0,0,0);
+  Motor_Stop();
   Servo_1_Angle(90);
   Servo_2_Angle(90);
 }
@@ -51,7 +75,7 @@ void Servo_2_Angle(int angle)
 }
 
 //A function to control the car motor
-void Motor_Move(int m1_speed, int m2_speed, int m3_speed, int m4_speed)
+static void ApplyMotorOutput(int m1_speed, int m2_speed, int m3_speed, int m4_speed)
 {
   m1_speed = MOTOR_1_DIRECTION * constrain(m1_speed, MOTOR_SPEED_MIN, MOTOR_SPEED_MAX);
   m2_speed = MOTOR_2_DIRECTION * constrain(m2_speed, MOTOR_SPEED_MIN, MOTOR_SPEED_MAX);
@@ -59,14 +83,14 @@ void Motor_Move(int m1_speed, int m2_speed, int m3_speed, int m4_speed)
   m4_speed = MOTOR_4_DIRECTION * constrain(m4_speed, MOTOR_SPEED_MIN, MOTOR_SPEED_MAX);
   if (m1_speed > 0)
   {
-    m1_speed = constrain(m1_speed, 1600, 4095);
+    m1_speed = constrain(m1_speed, 0, rover::kSpeedLimit);
     pca9685.setChannelPulseWidth(PIN_MOTOR_M1_IN1, m1_speed);
     pca9685.setChannelPulseWidth(PIN_MOTOR_M1_IN2, 0);
   }
   else if (m1_speed < 0)
   {
     m1_speed = -m1_speed;
-    m1_speed = constrain(m1_speed, 1600, 4095);
+    m1_speed = constrain(m1_speed, 0, rover::kSpeedLimit);
     pca9685.setChannelPulseWidth(PIN_MOTOR_M1_IN1, 0);
     pca9685.setChannelPulseWidth(PIN_MOTOR_M1_IN2, m1_speed);
   }
@@ -77,14 +101,14 @@ void Motor_Move(int m1_speed, int m2_speed, int m3_speed, int m4_speed)
   }
   if (m2_speed > 0)
   {
-    m2_speed = constrain(m2_speed, 1600, 4095);
+    m2_speed = constrain(m2_speed, 0, rover::kSpeedLimit);
     pca9685.setChannelPulseWidth(PIN_MOTOR_M2_IN1, m2_speed);
     pca9685.setChannelPulseWidth(PIN_MOTOR_M2_IN2, 0);
   }
   else if (m2_speed < 0)
   {
     m2_speed = -m2_speed;
-    m2_speed = constrain(m2_speed, 1600, 4095);
+    m2_speed = constrain(m2_speed, 0, rover::kSpeedLimit);
     pca9685.setChannelPulseWidth(PIN_MOTOR_M2_IN1, 0);
     pca9685.setChannelPulseWidth(PIN_MOTOR_M2_IN2, m2_speed);
   }
@@ -95,14 +119,14 @@ void Motor_Move(int m1_speed, int m2_speed, int m3_speed, int m4_speed)
   }
   if (m3_speed > 0)
   {
-    m3_speed = constrain(m3_speed, 1600, 4095);
+    m3_speed = constrain(m3_speed, 0, rover::kSpeedLimit);
     pca9685.setChannelPulseWidth(PIN_MOTOR_M3_IN1, m3_speed);
     pca9685.setChannelPulseWidth(PIN_MOTOR_M3_IN2, 0);
   }
   else if (m3_speed < 0)
   {
     m3_speed = -m3_speed;
-    m3_speed = constrain(m3_speed, 1600, 4095);
+    m3_speed = constrain(m3_speed, 0, rover::kSpeedLimit);
     pca9685.setChannelPulseWidth(PIN_MOTOR_M3_IN1, 0);
     pca9685.setChannelPulseWidth(PIN_MOTOR_M3_IN2, m3_speed);
   }
@@ -113,14 +137,14 @@ void Motor_Move(int m1_speed, int m2_speed, int m3_speed, int m4_speed)
   }
   if (m4_speed > 0)
   {
-    m4_speed = constrain(m4_speed, 1600, 4095);
+    m4_speed = constrain(m4_speed, 0, rover::kSpeedLimit);
     pca9685.setChannelPulseWidth(PIN_MOTOR_M4_IN1, m4_speed);
     pca9685.setChannelPulseWidth(PIN_MOTOR_M4_IN2, 0);
   }
   else if (m4_speed < 0)
   {
     m4_speed = -m4_speed;
-    m4_speed = constrain(m4_speed, 1600, 4095);
+    m4_speed = constrain(m4_speed, 0, rover::kSpeedLimit);
     pca9685.setChannelPulseWidth(PIN_MOTOR_M4_IN1, 0);
     pca9685.setChannelPulseWidth(PIN_MOTOR_M4_IN2, m4_speed);
   }

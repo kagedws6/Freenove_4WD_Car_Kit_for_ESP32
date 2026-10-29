@@ -25,26 +25,42 @@ void WiFi_Setup(bool WiFi_Mode)
   {
     WiFi_MODE = 0;
     WiFi.mode(WIFI_STA);
+    WiFi.setScanMethod(WIFI_ALL_CHANNEL_SCAN);
+    WiFi.setSortMethod(WIFI_CONNECT_AP_BY_SIGNAL);
     WiFi.begin(ssid_Router, password_Router);
     WiFi.setSleep(false);
     WiFi.setAutoReconnect(true);
 
     Serial.print("\nWaiting for WiFi... ");
-    while (WiFi.isConnected() != true) {
-      Serial.print(".");
-      delay(500);
+    const uint32_t started = millis();
+    while ((!WiFi.isConnected() || !WiFi.localIP()) &&
+           static_cast<uint32_t>(millis() - started) < 15000) {
+      delay(50);
     }
-    while (WiFi.STA.hasIP() != true) {
-      Serial.print(".");
-      delay(500);
+    if (!WiFi.isConnected() || !WiFi.localIP()) {
+      WiFi.setAutoReconnect(false);
+      WiFi.disconnect(false, false);
+      int count = WiFi.scanNetworks(false, true);
+      bool visible = false;
+      for (int i = 0; i < count; ++i) {
+        if (WiFi.SSID(i) == ssid_Router) {
+          visible = true;
+          Serial.printf("Saved network scan: channel=%d signal=%d auth=%d\n",
+                        WiFi.channel(i), WiFi.RSSI(i), WiFi.encryptionType(i));
+        }
+      }
+      Serial.printf("Saved network visible: %s (scan count=%d)\n", visible ? "yes" : "no", count);
+      WiFi.scanDelete();
+      Serial.println("WiFi connection failed; starting setup access point.");
+      WiFi_Setup(1);
+      return;
     }
     IPAddress local_ip = WiFi.localIP();
     Serial.println("");
     Serial.println("\nWiFi connected");
     Serial.print("Use your phone to connect to WiFi: ");
     Serial.println(ssid_Router);
-    Serial.print("\nThe password for WiFi is: ");
-    Serial.println(password_Router);
+
     Serial.print("\nThen you can enter: '");
     Serial.print(local_ip);
     Serial.println("' to connect the car in Freenove app.");
@@ -62,8 +78,7 @@ void WiFi_Setup(bool WiFi_Mode)
 
     Serial.print("\nUse your phone to connect to WiFi: ");
     Serial.println(ssid_AP);
-    Serial.print("\nThe password for WiFi is: ");
-    Serial.println(password_AP);
+
     Serial.print("\nThen you can enter: '");
     Serial.print(local_IP);
     Serial.println("' to connect the car in Freenove app.");
@@ -73,51 +88,10 @@ void WiFi_Setup(bool WiFi_Mode)
   }
 }
 
-int wtdFlag = 0;
-void loopTask_WTD(void *pvParameters) {
-  while (1)
-  {
-    if (WiFi_MODE == 0)
-    {
-      if ((WiFi.isConnected() == 0) && wtdFlag == 0)
-      {
-        delay(100);
-      }
-      else if ((WiFi.isConnected() != 0) && wtdFlag == 0)
-      {
-        wtdFlag = 1;
-        delay(100);
-      }
-      else if ((WiFi.isConnected() == 0) && wtdFlag == 1)
-      {
-        wtdFlag = 0;
-        ESP.restart();
-      }
-    }
-    else
-    {
-      if ((WiFi.softAPgetStationNum() == 0) && wtdFlag == 0)
-      {
-        delay(100);
-      }
-      else if ((WiFi.softAPgetStationNum() != 0) && wtdFlag == 0)
-      {
-        wtdFlag = 1;
-        delay(100);
-      }
-      else if ((WiFi.softAPgetStationNum() == 0) && wtdFlag == 1)
-      {
-        wtdFlag = 0;
-        ESP.restart();
-      }
-    }
-  }
-}
-
 ///////////////////Camera drive area///////////////////////////////////
 //Camera initialization
 bool cameraSetup(void) {
-  camera_config_t config;
+  camera_config_t config = {};
   config.ledc_channel = LEDC_CHANNEL_1;//From modification
   config.ledc_timer = LEDC_TIMER_1;//From modification
   config.pin_d0 = Y2_GPIO_NUM;
@@ -157,7 +131,9 @@ bool cameraSetup(void) {
     }
   }
 
+  if (err != ESP_OK && err != ESP_ERR_NOT_SUPPORTED) return false;
   sensor_t * s = esp_camera_sensor_get();
+  if (!s) return false;
   // drop down frame size for higher initial frame rate
   uint16_t pid = s->id.PID;
   if(pid == OV2640_PID){

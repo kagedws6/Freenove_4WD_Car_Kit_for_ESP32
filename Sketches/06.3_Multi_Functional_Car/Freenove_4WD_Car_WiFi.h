@@ -24,7 +24,6 @@ extern char* password_Router         ;    //Modify according to your router pass
 extern char* ssid_AP                 ;    //ESP32 turns on an AP and calls it Sunshine
 extern char* password_AP             ;    //Set your AP password for ESP32 to Sunshine
 void WiFi_Setup(bool WiFi_Mode)      ;    //Initialize WiFi function
-void loopTask_WTD(void *pvParameters);
 
 ///////////////////Camera drive area////////////////////////////////////////
 #define PWDN_GPIO_NUM    -1

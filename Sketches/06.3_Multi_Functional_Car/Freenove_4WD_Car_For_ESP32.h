@@ -5,6 +5,10 @@
 #include <PCA9685.h>
 #include <PCF8574.h>
 #include "esp_adc_cal.h"
+#include "RoverControl.h"
+extern rover::MotionGuard roverMotion;
+void Motor_Stop(void);
+void Motor_Service(void);
 
 #define MOTOR_1_DIRECTION     1 //If the direction is reversed, change 1 to -1
 #define MOTOR_2_DIRECTION     1 //If the direction is reversed, change 1 to -1

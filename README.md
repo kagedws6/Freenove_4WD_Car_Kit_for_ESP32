@@ -1,5 +1,7 @@
 ## Freenove 4WD Car Kit for ESP32
 
+This fork adds the [modular rover controller prototype](docs/modular-rover-control.md): bounded command parsing, motor-command expiry, PWM limits and ramps, and local Wi-Fi setup in `Sketches/06.3_Multi_Functional_Car`. The original firmware is preserved in Git history. Voice-board integration and physical motion tests are still pending; see the engineering notes before flashing or operating the modified example.
+
 > A 4WD car kit for ESP32.
 
 <img src='Picture/icon.png' width='30%'/>

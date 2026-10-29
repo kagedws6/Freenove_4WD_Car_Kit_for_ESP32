@@ -1,136 +1,193 @@
 /**********************************************************************
-  Filename    : Camera Car
-  Product     : Freenove 4WD Car for ESP32
-  Auther      : www.freenove.com
-  Modification: 2024/08/12
+  Based on Freenove Camera Car, 2024/08/12.
+  Modular rover extension: bounded input, motion leases and PWM slew limits.
 **********************************************************************/
-
 #include <Arduino.h>
 #include <WiFi.h>
-#include <WiFiClient.h>
-#include <WiFiAP.h>
+#include <atomic>
+#include <sys/socket.h>
 #include "esp_camera.h"
 #include "Freenove_4WD_Car_WiFi.h"
 #include "Freenove_4WD_Car_Emotion.h"
 #include "Freenove_4WD_Car_WS2812.h"
 #include "Freenove_4WD_Car_For_ESP32.h"
+#include "RoverNetwork.h"
 
-String CmdArray[8];
-int paramters[8];
-bool videoFlag = 0;
-
-void WiFi_Init() {
-  ssid_Router     =   "********";    //Modify according to your router name
-  password_Router =   "********";    //Modify according to your router password
-  ssid_AP         =   "Sunshine";    //ESP32 turns on an AP and calls it Sunshine
-  password_AP     =   "Sunshine";    //Set your AP password for ESP32 to Sunshine
-}
-
+std::atomic<bool> videoFlag{false};
 WiFiServer server_Cmd(4000);
 WiFiServer server_Camera(7000);
+WiFiClient commandClient;
+rover::LineReceiver receiver;
+bool hadCommandClient = false;
+bool cameraReady = false;
+
+bool reply(const char* text) {
+  const size_t length = strlen(text);
+  // Never wait for a controller that stops reading replies while motors run.
+  if (send(commandClient.fd(), text, length, MSG_DONTWAIT) != static_cast<int>(length)) {
+    Motor_Stop(); commandClient.stop(); return false;
+  }
+  return true;
+}
+
+void WiFi_Init() {
+  // Keep network credentials local; the default remains the original AP mode.
+  ssid_Router = "********";
+  password_Router = "********";
+  ssid_AP = "Sunshine";
+  password_AP = "Sunshine";
+}
 
 void setup() {
-  Buzzer_Setup();           //Buzzer initialization
   Serial.begin(115200);
-  Serial.setDebugOutput(true);
-  WiFi_Init();              //WiFi paramters initialization
-  WiFi_Setup(1);            //Start AP Mode. If you want to connect to a router, change 1 to 0.
-  server_Cmd.begin(4000);   //Start the command server
-  server_Camera.begin(7000);//Turn on the camera server
-
-  cameraSetup();            //Camera initialization
-  Emotion_Setup();          //Emotion initialization
-  WS2812_Setup();           //WS2812 initialization
-  PCA9685_Setup();          //PCA9685 initialization
-  Light_Setup();            //Light initialization
-  Track_Setup();            //Track initialization
-
+  PCA9685_Setup(); // Disable motor outputs before network/camera initialization.
+  Buzzer_Setup();
+  WiFi_Init();
+  RoverNetworkBegin();
+  server_Cmd.begin();
+  server_Camera.begin();
+  cameraReady = cameraSetup();
+  Emotion_Setup();
+  WS2812_Setup();
+  Light_Setup();
+  Track_Setup();
   Setup_Battery_Monitor();
+  if (cameraReady)
+    xTaskCreateUniversal(loopTask_Camera, "loopTask_Camera", 8192, NULL, 0, NULL, 0);
+}
 
-  xTaskCreateUniversal(loopTask_Camera, "loopTask_Camera", 8192, NULL, 0, NULL, 0);
-  xTaskCreateUniversal(loopTask_WTD, "loopTask_WTD", 8192, NULL, 0, NULL, 0);
+bool inRange(int v, int lo, int hi) { return v >= lo && v <= hi; }
+
+bool handleCommand(const rover::Command& c) {
+  const int* v = c.values;
+  const size_t n = c.count;
+  const uint32_t now = millis();
+  if (!strcmp(c.name, "CMD_STOP") && n == 0) {
+    Motor_Stop(); return true;
+  }
+  if (!strcmp(c.name, "CMD_HEARTBEAT") && n == 0) {
+    // A late heartbeat cannot revive an expired motion command.
+    return roverMotion.heartbeat(now);
+  }
+  if (!strcmp(c.name, "CMD_DRIVE") && n == 3) {
+    if (!inRange(v[0], -4095, 4095) || !inRange(v[1], -4095, 4095) ||
+        !inRange(v[2], 1, rover::kMaxDriveMs)) return false;
+    Car_SetMode(0);
+    roverMotion.arm(now, v[2], true);
+    Motor_Move(v[0], v[0], v[1], v[1]);
+    if (v[0] == 0 && v[1] == 0) Motor_Stop();
+    return true;
+  }
+  if (!strcmp(c.name, CMD_MOTOR) && n == 4) {
+    for (int i = 0; i < 4; ++i) if (!inRange(v[i], -4095, 4095)) return false;
+    Car_SetMode(0);
+    roverMotion.arm(now);
+    Motor_Move(v[0], v[0], v[2], v[2]); // Preserve the stock side-pair mapping.
+    if (v[0] == 0 && v[2] == 0) Motor_Stop();
+    return true;
+  }
+  if ((!strcmp(c.name, CMD_CAR_MODE) || !strcmp(c.name, CMD_LIGHT) ||
+       !strcmp(c.name, CMD_TRACK)) && n == 1) {
+    int mode = v[0];
+    if (!strcmp(c.name, CMD_CAR_MODE)) {
+      if (!inRange(mode, 0, 2)) return false;
+    } else {
+      if (!inRange(mode, 0, 1)) return false;
+      if (mode) mode = !strcmp(c.name, CMD_LIGHT) ? 1 : 2;
+    }
+    Motor_Stop();
+    if (mode) { roverMotion.arm(now); Car_SetMode(mode); }
+    return true;
+  }
+  if (!strcmp(c.name, CMD_SERVO) && n == 2) {
+    if (!inRange(v[0], 0, 1) || !inRange(v[1], v[0] ? 80 : 0, 180)) return false;
+    if (v[0] == 0) Servo_1_Angle(v[1]); else Servo_2_Angle(v[1]);
+    return true;
+  }
+  if (!strcmp(c.name, CMD_CAMERA) && n == 2) {
+    if (!inRange(v[0], 0, 180) || !inRange(v[1], 80, 180)) return false;
+    Servo_1_Angle(v[0]); Servo_2_Angle(v[1]); return true;
+  }
+  if (!strcmp(c.name, CMD_LED_MOD) && n == 1 && inRange(v[0], 0, 5)) {
+    WS2812_SetMode(v[0]); return true;
+  }
+  if (!strcmp(c.name, CMD_MATRIX_MOD) && n == 1 && inRange(v[0], 0, 7)) {
+    Emotion_SetMode(v[0]); return true;
+  }
+  if (!strcmp(c.name, CMD_LED) && n == 4 && inRange(v[0], 0, 4095) &&
+      inRange(v[1], 0, 255) && inRange(v[2], 0, 255) && inRange(v[3], 0, 255)) {
+    WS2812_Set_Color_1(v[0], v[1], v[2], v[3]); return true;
+  }
+  if (!strcmp(c.name, CMD_VIDEO) && n == 1 && inRange(v[0], 0, 1)) {
+    if (v[0] && !cameraReady) return false;
+    videoFlag = v[0] != 0; return true;
+  }
+  if (!strcmp(c.name, CMD_BUZZER) && n == 2 && inRange(v[0], 0, 1) && inRange(v[1], 0, 10000)) {
+    Buzzer_Variable(v[0], v[1]); return true;
+  }
+  if (!strcmp(c.name, CMD_POWER) && n == 0) {
+    char response[64];
+    snprintf(response, sizeof(response), "CMD_POWER#%.2f\n", Get_Battery_Voltage());
+    return reply(response);
+  }
+  if (!strcmp(c.name, "CMD_STATUS") && n == 0) {
+    char response[128];
+    snprintf(response, sizeof(response), "CMD_STATUS#1#%d#%d#%d#%d#%d#%.2f#%d\n",
+      roverMotion.armed, carFlag, rover::kSpeedLimit,
+      roverMotion.output[0], roverMotion.output[2], Get_Battery_Voltage(), cameraReady);
+    return reply(response);
+  }
+  return false;
+}
+
+void badCommand() {
+  Motor_Stop();
+  reply("ERR#BAD_COMMAND\n");
 }
 
 void loop() {
-  WiFiClient client = server_Cmd.accept();                 //listen for incoming clients
-  if (client) {                                               //if you get a client
-    Serial.println("Cmd_Server connected to a client.");
-    while (client.connected()) {                              //loop while the client's connected
-      if (client.available()) {                               //if there's bytes to read from the client
-        String inputStringTemp = client.readStringUntil('\n');//Read the command by WiFi
-        Serial.println(inputStringTemp);                      //Print out the command received by WiFi
-        Get_Command(inputStringTemp);
-
-        if (CmdArray[0] == CMD_LED_MOD)//Set the display mode of car colored lights
-          WS2812_SetMode(paramters[1]);
-        if (CmdArray[0] == CMD_LED) //Set the color and brightness of the car lights
-          WS2812_Set_Color_1(paramters[1], paramters[2], paramters[3], paramters[4]);
-        if (CmdArray[0] == CMD_MATRIX_MOD)//Set the display mode of the LED matrix
-          Emotion_SetMode(paramters[1]);
-        if (CmdArray[0] == CMD_VIDEO)//Video transmission command
-          videoFlag = paramters[1];
-        if (CmdArray[0] == CMD_BUZZER) //Buzzer control command
-          Buzzer_Variable(paramters[1], paramters[2]);
-        if (CmdArray[0] == CMD_POWER) {//Power query command
-          float battery_voltage = Get_Battery_Voltage();
-          client.print(CMD_POWER);
-          client.print(INTERVAL_CHAR);
-          client.print(battery_voltage);
-          client.print(ENTER);
-        }
-        if (CmdArray[0] == CMD_MOTOR) {//Network control car movement command
-          Car_SetMode(0);
-          if (paramters[1] == 0 && paramters[3] == 0)
-            Motor_Move(0, 0, 0, 0);//Stop the car
-          else //If the parameters are not equal to 0
-            Motor_Move(paramters[1], paramters[1], paramters[3], paramters[3]);
-        }
-        if (CmdArray[0] == CMD_SERVO) {//Network control servo motor movement command
-          if (paramters[1] == 0)
-            Servo_1_Angle(paramters[2]);
-          else if (paramters[1] == 1)
-            Servo_2_Angle(paramters[2]);
-        }
-        if (CmdArray[0] == CMD_CAMERA) {//Network control servo motor movement command
-          Servo_1_Angle(paramters[1]);
-          Servo_2_Angle(paramters[2]);
-        }
-        if (CmdArray[0] == CMD_LIGHT) { //Light seeking car command
-          if (paramters[1] == 1)
-            Car_SetMode(1);
-          else if (paramters[1] == 0)
-            Car_SetMode(0);
-        }
-        else if (CmdArray[0] == CMD_TRACK) { //Tracking car command
-          if (paramters[1] == 1)
-            Car_SetMode(2);
-          else if (paramters[1] == 0)
-            Car_SetMode(0);
-        }
-        if (CmdArray[0] == CMD_CAR_MODE) { //Car command Mode
-          Car_SetMode(paramters[1]);
-        }
-        //Clears the command array and parameter array
-        memset(CmdArray, 0, sizeof(CmdArray));
-        memset(paramters, 0, sizeof(paramters));
-      }
-      Emotion_Show(emotion_task_mode);//Led matrix display function
-      WS2812_Show(ws2812_task_mode);  //Car color lights display function
-      Car_Select(carFlag);            //ESP32 Car mode selection function
-    }
-    client.stop();//close the connection:
-    Serial.println("Command Client Disconnected.");
-    ESP.restart();
+  Motor_Service();
+  if (RoverNetworkService()) { delay(1); return; }
+  if (hadCommandClient && !commandClient.connected()) {
+    Motor_Stop();
+    videoFlag = false;
+    commandClient.stop(); receiver.reset(); hadCommandClient = false;
   }
+  if (!hadCommandClient) {
+    commandClient = server_Cmd.accept();
+    if (commandClient) {
+      receiver.reset(); hadCommandClient = true; Motor_Stop();
+    }
+  }
+  if (hadCommandClient) {
+    if (receiver.expire(millis())) badCommand();
+    // A sender cannot monopolize the motor service by streaming bytes forever.
+    for (int budget = 0; budget < 96 && commandClient.available(); ++budget) {
+      auto result = receiver.push(static_cast<char>(commandClient.read()), millis());
+      if (result == rover::LineReceiver::Invalid) badCommand();
+      if (result == rover::LineReceiver::Complete) {
+        rover::Command c;
+        if (!rover::parseCommand(receiver.line, c) || !handleCommand(c)) badCommand();
+      }
+      Motor_Service();
+    }
+  }
+  if (roverMotion.armed) Car_Select(carFlag);
+  Motor_Service();
+  Emotion_Show(emotion_task_mode);
+  WS2812_Show(ws2812_task_mode);
+  delay(1);
 }
 
 void loopTask_Camera(void *pvParameters) {
   while (1) {
+    delay(5);
     WiFiClient client = server_Camera.accept();//listen for incoming clients
     if (client) {//if you get a client
       Serial.println("Camera_Server connected to a client.");
       if (client.connected()) {
         while (client.connected()) {//loop while the client's connected
+          delay(1);
           if (videoFlag) { 
             camera_fb_t* fb = esp_camera_fb_get();
             size_t jpg_buf_len = 0;
@@ -175,29 +232,8 @@ void loopTask_Camera(void *pvParameters) {
         //close the connection:
         client.stop();
         Serial.println("Camera Client Disconnected.");
-        ESP.restart();
+        // Camera disconnects do not restart or drive the rover.
       }
-    }
-  }
-}
-
-void Get_Command(String inputStringTemp)
-{
-  int string_length = inputStringTemp.length();
-  for (int i = 0; i < 8; i++) {//Parse the command received by WiFi
-    int index = inputStringTemp.indexOf(INTERVAL_CHAR);
-    if (index < 0) {
-      if (string_length > 0) {
-        CmdArray[i] = inputStringTemp;         //Get command
-        paramters[i] = inputStringTemp.toInt();//Get parameters
-      }
-      break;
-    }
-    else {
-      string_length -= index;                                //Count the remaining words
-      CmdArray[i] = inputStringTemp.substring(0, index);     //Get command
-      paramters[i] = CmdArray[i].toInt();                    //Get parameters
-      inputStringTemp = inputStringTemp.substring(index + 1);//Update string
     }
   }
 }
