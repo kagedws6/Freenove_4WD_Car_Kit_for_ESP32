@@ -1,0 +1,40 @@
+{
+  "date": "2026-10-29",
+  "source_code_commit": "7cfc009d19c1c68143e71e6a9a5e8eaf84a173ff",
+  "upstream_commit": "d7a0c6eb61fcdf0794be5e45c463e7fdcc4163ba",
+  "arduino_core": "3.3.11",
+  "fqbn": "esp32:esp32:esp32wrover:PartitionScheme=huge_app",
+  "application_bytes_reported": 1083736,
+  "application_partition_bytes": 3145728,
+  "static_ram_bytes_reported": 94736,
+  "merged_bytes": 4194304,
+  "merged_sha256": "580b71b90460f4f9e2ea14efdcb7489e9991e339835e680018511203c0a1895d",
+  "host_tests": "MSVC C++17 /W4 /WX: passed production-core parsing, framing, leases, heartbeat, pulse, ramp, reversal, rollover tests",
+  "original_backup": "Full 4MB private backup, device digest matched before flashing",
+  "flash": "Full initial flash and subsequent application-only updates verified by written-data hash; settings preserved during diagnostic updates",
+  "boot": {
+    "observation_seconds": 25,
+    "panic_or_abort": false,
+    "reset_markers": 1,
+    "setup_ap_started": true,
+    "camera_initialization": "completed with OV3660 sensor-setting warning; a subsequent JPEG frame decoded successfully",
+    "home_network_observation_seconds": 25,
+    "home_network_panic_or_abort": false,
+    "home_network_reset_markers": 1
+  },
+  "physical_motor_motion": "Not tested; no valid movement requests sent over the network; motor battery requested off",
+  "tcp_bench": "Passed scripts/bench_probe.py on setup AP and home LAN: malformed/oversized/expired frames rejected; zero PWM confirmed; two command-client connections accepted",
+  "voice_bridge": "Deferred at owner request: only one USB cable available tonight. Voice firmware unchanged.",
+  "application_sha256": "75c90bb1995d36c28d04e1f6fc2b058145fe05be094364b2e4b74bf6eaa9dac5",
+  "home_network": "Saved settings, corrected case-only SSID mismatch to match the intended voice-board network, reconnected after restart; no password changes",
+  "network_motion_commands_sent": false,
+  "camera_frame": {
+    "verified": true,
+    "format": "JPEG",
+    "width": 240,
+    "height": 176,
+    "bytes": 1764,
+    "privacy": "Frame retained only in private local diagnostics; not published"
+  },
+  "local_source_code_commit": "26873176cead6a1fd02b1e6f9be90dac815155dd"
+}
